@@ -180,3 +180,25 @@ class Stacy(Amoroso):
 
         return kl
 
+    def fourth_power_expected_value(self):
+        t, a, b = self.theta, self.alpha, self.beta
+        """
+        According to sympy:
+        x ~ Stacy(t,a,b)
+        E[x^4]  = 
+        0.25*b*t**b*t**(-b*(1 - (a*b + 4.0)/b))*t**(-a*b + 1)*gamma(a + 1 + 4.0/b)/(t*(0.25*a*b + 1.0)*gamma(a))
+
+        For stability, it will be better to exponiate the log of the above expression. 
+        TF only provides lgamma anyway...
+        """
+        ln = tf.math.log
+        result = tf.math.exp(
+            ln(0.25) + ln(b) + b*ln(t) + \
+            (-b*(1 - (a*b + 4.0)/b))*ln(t) + \
+            (-a*b + 1)*ln(t) + \
+            tf.math.lgamma(a + 1 + 4.0/b) - \
+            ln(t*(0.25*a*b + 1.0)) - \
+            tf.math.lgamma(a)
+        )
+
+        return result

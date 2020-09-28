@@ -1,5 +1,15 @@
 #!/usr/bin/env python
 
+
+"""
+`careful` is for now the name of my merging model which uses analytical expressions
+for the kl_divergence and log likelihood function. 
+
+it will have some more limited options for now. certain command line arguments will
+for the time being not do anything. eventually i will write  bespoke parser for this
+branch. 
+"""
+
 from careless.parser import parser
 # This needs to be called before tf is imported 
 # otherwise the log level will not be set properly
@@ -36,9 +46,7 @@ def main(merger, parser):
             merger.add_studentt_quad_likelihood(parser.studentt_likelihood_dof)
         else:
             merger.add_normal_quad_likelihood()
-        merger.likelihood.degree = s
     else:
-        s = parser.mc_samples
         if parser.laplace_likelihood:
             merger.add_laplace_likelihood()
         elif parser.studentt_likelihood_dof:
@@ -51,7 +59,7 @@ def main(merger, parser):
 
     losses = merger.train_model(
         parser.iterations, 
-        mc_samples=parser.mc_samples, 
+        analytical=True,
         learning_rate=parser.learning_rate,
         beta_1=parser.beta_1,
         beta_2=parser.beta_2,

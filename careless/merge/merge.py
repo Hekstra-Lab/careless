@@ -183,9 +183,17 @@ class BaseMerger():
         self.data = self.data[~idx]
         return self
 
-    def _build_merger(self):
+    def _build_merger(self, analytical=False):
         from careless.models.likelihoods.quadrature.base import QuadratureBase
-        if isinstance(self.likelihood, QuadratureBase):
+        if analytical:
+            from careless.models.merging.variational import AnalyticalMergingModel
+            self.merger = AnalyticalMergingModel(
+                self.data['miller_id'].to_numpy().astype(np.int32),
+                [self.scaling_model],
+                self.prior,
+                self.likelihood,
+            )
+        elif isinstance(self.likelihood, QuadratureBase):
             self.merger = QuadratureMergingModel(
                 self.data['miller_id'].to_numpy().astype(np.int32),
                 [self.scaling_model],
@@ -201,9 +209,9 @@ class BaseMerger():
             )
             
 
-    def train_model(self, iterations, mc_samples=1, learning_rate=0.01, beta_1=0.5, beta_2=0.9, clip_value=None):
+    def train_model(self, iterations, analytical=False, mc_samples=1, learning_rate=0.01, beta_1=0.5, beta_2=0.9, clip_value=None):
         if self.merger is None:
-            self._build_merger()
+            self._build_merger(analytical)
 
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=beta_1, beta_2=beta_2)
         losses = self.merger.fit(optimizer, iterations, s=mc_samples, clip_value=clip_value)

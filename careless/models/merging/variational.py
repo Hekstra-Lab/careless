@@ -1,6 +1,8 @@
 from careless.models.base import PerGroupModel
+from careless.models.likelihoods.quadrature.base import QuadratureBase
 from careless.utils.shame import sanitize_tensor
 from tensorflow_probability import distributions as tfd
+from careless.utils.distributions import Stacy
 from tqdm.autonotebook import tqdm
 import tensorflow_probability as tfp
 import tensorflow as tf
@@ -231,6 +233,98 @@ class VariationalMergingModel(PerGroupModel):
                 break
 
         return np.array(losses)
+
+class AnalyticalMergingModel(VariationalMergingModel):
+    def __init__(self, miller_ids, scaling_models, prior, likelihood, surrogate_posterior=None):
+        """"
+        For this model, the surrogate posterior and prior must be compatible. 
+        This means that surrogate_posterior must have a kl_divergence method which is compatible the wtih prior distribution.
+
+        Parameters
+        ----------
+        miller_ids : array
+            Numpy array or tf.Tensor with zero indexed miller ids that map each reflection observation to a 
+            miller index. In the case of a harmonic likelihood function, this array may be longer than actual
+            number of observed reflection intensities. 
+        scaling_models : careless.models.scaling.Scaler or iterable
+            An instance of a carless.model.scaling.Scaler class or list/tuple thereof.
+        prior : distribution
+            Prior distribution on merged, normalized structure factor amplitudes. 
+            Either a Distribution from tensorflow_probability.distributions or 
+            a Prior from careless.models.distributions. This must implement .prob and .log_prob. 
+            This distribution must have an `event_shape` equal to `np.max(miller_ids) + 1`.
+        posterior_truncated_normal_max : float
+            the maximum value of the surrogate posterior distribution. 
+            this defaults to 1e10. this should only need to be changed if you are using a prior on an empirical scale.
+        likelihood : distribution
+            A distribution with a `log_prob` and `prob` method. 
+            These methods must accept a `x : tf.Tensor` with `len(x) == len(miller_ids)`. 
+            For harmonic likelihoods, it may be the case the returned vector is smaller than `len(miller_ids)`.
+        surrogate_posterior : tfd.Distribution
+            A surrogate posterior distribution to use. 
+            If non is supplied, the default truncated normal distribution will be used. 
+            Any posteriors passed in with this arg must have all properly transformed parameters in their
+            `self.trainable_variables` iterable.  Use `tfp.util.TransformedVariable` to ensure positivity constraints
+            where applicable.
+        """
+
+        if surrogate_posterior is None:
+            if isinstance(prior, Stacy):
+                surrogate_posterior = Stacy(
+                    tfp.util.TransformedVariable(prior.theta, tfp.bijectors.Softplus()),
+                    tfp.util.TransformedVariable(prior.alpha, tfp.bijectors.Softplus()),
+                    #tfp.util.TransformedVariable(prior.beta , tfp.bijectors.Softplus()),
+                    tf.Variable(prior.beta), 
+                )
+            elif isinstance(prior, tfd.Normal):
+                surrogate_posterior = tfd.Normal(
+                    tf.Variable(prior.mean()),
+                    tfp.util.TransformedVariable(prior.mean(), tfp.bijectors.Softplus()),
+                )
+            else:
+                e = TypeError(
+                    f"Received prior {prior} with type {type(prior)} but either careless.utils.distributions.Stacy"
+                    "or tensorflow_probability.distributions.Normal were expected"
+                )
+                raise(e)
+
+        super().__init__(miller_ids, scaling_models, prior, likelihood, surrogate_posterior)
+                
+
+
+    def __call__(self):
+        #for consistency with the black box merger
+        kl_div = tf.reduce_sum(self.surrogate_posterior.kl_divergence(self.prior))
+
+        model = self.scaling_models[0]
+        loc, scale = model.loc_and_scale()
+
+
+        if isinstance(self.likelihood, QuadratureBase):
+            #raise NotImplementedError("Quadrature likelihoods are not yet supported for models with analytical KL Divergence")
+            J = self.expand(self.surrogate_posterior.variance() + self.surrogate_posterior.mean()**2.) 
+            # We have to compute the variance of F**2 which we will do by 
+            I = J*loc
+
+            # Var(F**2) = E[F^4] - E[F^2]^2 == E[F^4] - J^2
+            Var_J = self.expand(self.surrogate_posterior.fourth_power_expected_value()) - J**2.
+
+            SigI = tf.math.sqrt(Var_J*scale**2. + Var_J*loc**2. + scale**2.*J**2.)
+            log_likelihood = tf.reduce_sum(self.likelihood.expected_log_likelihood(I, SigI))
+        else:
+            #Sigma = scale**2. + loc**2.
+            Sigma = loc
+            I = self.expand(self.surrogate_posterior.variance() + self.surrogate_posterior.mean()**2.) * Sigma
+            log_likelihood = tf.reduce_sum(self.likelihood.log_prob(I))
+
+        loss = -log_likelihood + kl_div
+        return loss
+
+    def loss_and_grads(self, variables, s=1):
+        with tf.GradientTape() as tape:
+            loss = self()
+        grads = tape.gradient(loss, variables)
+        return loss, grads
 
 class QuadratureMergingModel(VariationalMergingModel):
     def __call__(self, return_kl_term=False, sample_shape=10, seed=None, name='sample', **kwargs):

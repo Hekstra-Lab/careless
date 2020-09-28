@@ -1,4 +1,5 @@
 from careless.models.priors.base import Prior
+from careless.utils.distributions import Stacy
 from tensorflow_probability import distributions as tfd
 from tensorflow_probability import bijectors as tfb
 import numpy as np
@@ -38,7 +39,7 @@ def Acentric(**kw):
     dist = tfd.Weibull(2., 1., **kw)
     return dist
 
-class WilsonPrior(Prior):
+class WilsonPrior(Stacy, Prior):
     """Wilson's priors on structure factor amplitudes."""
     def __init__(self, centric, epsilon):
         """
@@ -49,34 +50,19 @@ class WilsonPrior(Prior):
         epsilon : array
             Floating point array with multiplicity values for each structure factor.
         """
+        #Stacy parameters
+        centric_params  = (np.sqrt(2.).astype(np.float32), 0.5, 2.)
+        acentric_params = (1., 1., 2.)
+
         self.epsilon = np.array(epsilon, dtype=np.float32)
         self.centric = np.array(centric, dtype=np.float32)
-        self.p_centric = Centric()
-        self.p_acentric = Acentric()
 
-    def log_prob(self, x):
-        """
-        Parameters
-        ----------
-        x : tf.Tensor
-            Array of structure factor values with the same shape epsilon and centric.
-        """
-        x = x / np.sqrt(self.epsilon)
-        return self.centric*self.p_centric.log_prob(x) + (1. - self.centric)*self.p_acentric.log_prob(x)
+        theta = centric_params[0] * self.centric + acentric_params[0] * (1. - self.centric)
+        alpha = centric_params[1] * self.centric + acentric_params[1] * (1. - self.centric)
+        beta  = centric_params[2] * self.centric + acentric_params[2] * (1. - self.centric)
 
-    def prob(self, x):
-        """
-        Parameters
-        ----------
-        x : tf.Tensor
-            Array of structure factor values with the same shape epsilon and centric.
-        """
-        x = x / np.sqrt(self.epsilon)
-        return self.centric*self.p_centric.prob(x) + (1. - self.centric)*self.p_acentric.prob(x)
+        theta = theta * np.sqrt(self.epsilon) # I am pretty sure this is right.
 
-    def mean(self):
-        return np.sqrt(self.epsilon)*(self.centric*self.p_centric.mean() + (1. - self.centric)*self.p_acentric.mean())
+        super().__init__(theta, alpha, beta)
 
-    def stddev(self):
-        return np.sqrt(self.epsilon)*(self.centric*self.p_centric.stddev() + (1. - self.centric)*self.p_acentric.stddev())
 
